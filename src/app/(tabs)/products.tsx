@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, TextInput, Pressable, FlatList, ActivityIndicator, RefreshControl, Modal, Alert } from 'react-native';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { View, Text, TextInput, Pressable, FlatList, ActivityIndicator, RefreshControl, Modal, Alert, ScrollView } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { db, sqlite } from '../../shared/database/db';
 import { syncService } from '../../shared/services/syncService';
 import { syncQueueService } from '../../shared/services/syncQueueService';
-import { Search, ScanBarcode, Plus, Edit2, Trash2, ShoppingCart, ChevronRight } from 'lucide-react-native';
+import { Search, ScanBarcode, Plus, Edit2, Trash2, ShoppingCart, ChevronRight, X, Layers, PieChart, Package } from 'lucide-react-native';
 import { Image as ExpoImage } from 'expo-image';
 import { useSettingsStore, getCurrencySymbol } from '../../shared/store/settingsStore';
 
@@ -25,6 +25,19 @@ export default function ProductsScreen() {
   const [quickStock, setQuickStock] = useState('');
   const [quickEditVisible, setQuickEditVisible] = useState(false);
   const [expandedProductId, setExpandedProductId] = useState<number | null>(null);
+  const [selectedBreakdownProduct, setSelectedBreakdownProduct] = useState<any | null>(null);
+
+  const formatCurrency = (amount: number) => {
+    try {
+      const numStr = new Intl.NumberFormat('en-US', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(amount);
+      return `${symbol}${numStr}`;
+    } catch {
+      return `${symbol}${amount.toFixed(2)}`;
+    }
+  };
 
   // Debounce search query changes
   useEffect(() => {
@@ -41,7 +54,7 @@ export default function ProductsScreen() {
       const query = debouncedSearchQuery.trim();
       if (query.length > 0) {
         const queryTerm = `%${query}%`;
-        rows = sqlite.getAllSync<any>(
+        rows = await sqlite.getAllAsync<any>(
           `SELECT id, name, price, stock_quantity as stockQuantity, stock_status as stockStatus, sku, images, manage_stock as manageStock, regular_price as regularPrice, sale_price as salePrice, menu_order as menuOrder 
            FROM products 
            WHERE name LIKE ? OR sku LIKE ? 
@@ -49,12 +62,31 @@ export default function ProductsScreen() {
           queryTerm, queryTerm
         );
       } else {
-        rows = sqlite.getAllSync<any>(
+        rows = await sqlite.getAllAsync<any>(
           `SELECT id, name, price, stock_quantity as stockQuantity, stock_status as stockStatus, sku, images, manage_stock as manageStock, regular_price as regularPrice, sale_price as salePrice, menu_order as menuOrder 
            FROM products 
            ORDER BY menu_order ASC, name ASC`
         );
       }
+
+      // Pre-calculate Total Sell quantity across all orders
+      const orderLinesRows = await sqlite.getAllAsync<{ line_items: string }>(`SELECT line_items FROM orders`);
+      const salesMap = new Map<number, number>();
+      orderLinesRows.forEach((o) => {
+        if (!o.line_items) return;
+        try {
+          const items = JSON.parse(o.line_items);
+          if (Array.isArray(items)) {
+            items.forEach((line: any) => {
+              const pid = Number(line.product_id || line.id);
+              if (!pid) return;
+              const parsedQty = parseInt(String(line.quantity ?? line.qty ?? 0), 10);
+              const qty = !isNaN(parsedQty) && parsedQty > 0 ? parsedQty : 1;
+              salesMap.set(pid, (salesMap.get(pid) || 0) + qty);
+            });
+          }
+        } catch {}
+      });
 
       const parsed = rows.map((r: any) => {
         let imgs: any[] = [];
@@ -73,6 +105,7 @@ export default function ProductsScreen() {
           regularPrice: r.regularPrice,
           salePrice: r.salePrice,
           menuOrder: r.menuOrder || 0,
+          totalSell: salesMap.get(Number(r.id)) || 0,
         };
       });
 
@@ -84,16 +117,26 @@ export default function ProductsScreen() {
     }
   }, [debouncedSearchQuery]);
 
-  // Load cache on focus and search query changes
+  const loadLocalProductsRef = useRef(loadLocalProducts);
+  useEffect(() => {
+    loadLocalProductsRef.current = loadLocalProducts;
+  }, [loadLocalProducts]);
+
+  const isInitialMount = useRef(true);
+  useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
+    loadLocalProductsRef.current();
+  }, [debouncedSearchQuery]);
+
+  // Load cache ONLY on focus
   useFocusEffect(
     useCallback(() => {
-      loadLocalProducts();
-    }, [loadLocalProducts])
+      loadLocalProductsRef.current();
+    }, [])
   );
-
-  useEffect(() => {
-    loadLocalProducts();
-  }, [debouncedSearchQuery, loadLocalProducts]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -236,6 +279,65 @@ export default function ProductsScreen() {
     );
   };
 
+  // Smart Product Breakdown Calculation Engine across ALL Order Statuses
+  const handleOpenBreakdown = async (product: any) => {
+    setSelectedBreakdownProduct({ ...product, loadingBreakdown: true });
+    try {
+      const orderLinesRows = await sqlite.getAllAsync<{ line_items: string; status: string }>(
+        `SELECT line_items, status FROM orders`
+      );
+
+      let totalQty = 0;
+      let netRev = 0;
+      const statusBreakdown: Record<string, { count: number; revenue: number }> = {};
+
+      orderLinesRows.forEach((o) => {
+        if (!o.line_items) return;
+        const ordStatus = (o.status || 'unknown').toLowerCase().replace('wc-', '');
+        try {
+          const items = JSON.parse(o.line_items);
+          if (Array.isArray(items)) {
+            items.forEach((line: any) => {
+              const pid = Number(line.product_id || line.id);
+              if (pid === Number(product.id)) {
+                const parsedQty = parseInt(String(line.quantity ?? line.qty ?? 0), 10);
+                const qty = !isNaN(parsedQty) && parsedQty > 0 ? parsedQty : 1;
+                const lineTotal = Number(line.total || line.subtotal) || 0;
+
+                totalQty += qty;
+                if (ordStatus !== 'cancelled' && ordStatus !== 'failed' && ordStatus !== 'trash') {
+                  netRev += lineTotal;
+                }
+
+                if (!statusBreakdown[ordStatus]) {
+                  statusBreakdown[ordStatus] = { count: 0, revenue: 0 };
+                }
+                statusBreakdown[ordStatus].count += qty;
+                statusBreakdown[ordStatus].revenue += lineTotal;
+              }
+            });
+          }
+        } catch {}
+      });
+
+      setSelectedBreakdownProduct({
+        ...product,
+        totalQuantityAll: totalQty,
+        revenueGenerated: netRev,
+        statusBreakdown,
+        loadingBreakdown: false,
+      });
+    } catch {
+      setSelectedBreakdownProduct({
+        ...product,
+        totalQuantityAll: 0,
+        revenueGenerated: 0,
+        statusBreakdown: {},
+        loadingBreakdown: false,
+      });
+    }
+  };
+
   return (
     <View className="flex-1 bg-slate-50 px-5 pt-4">
       
@@ -352,8 +454,8 @@ export default function ProductsScreen() {
                       ) : null}
                     </View>
 
-                    {/* Stock Status Badge */}
-                    <View className="flex-row mt-1.5">
+                    {/* Stock Status & Total Sell Badges (Max 8px border radius) */}
+                    <View className="flex-row items-center flex-wrap gap-2 mt-1.5">
                       <View className={`px-2 py-0.5 rounded flex-row items-center gap-1 ${
                         isOutOfStock ? 'bg-red-500/10' :
                         isLowStock ? 'bg-amber-500/10' : 'bg-emerald-500/10'
@@ -371,6 +473,12 @@ export default function ProductsScreen() {
                            item.manageStock ? `In Stock (${item.stockQuantity})` : 'In Stock'}
                         </Text>
                       </View>
+
+                      <View className="bg-blue-500/10 border border-blue-500/20 px-2.5 py-0.5 rounded-md">
+                        <Text className="text-[10px] font-black text-blue-700">
+                          Total Sell: {item.totalSell || 0}
+                        </Text>
+                      </View>
                     </View>
                   </View>
 
@@ -379,30 +487,36 @@ export default function ProductsScreen() {
 
                 {/* Expanded Actions Tray */}
                 {isExpanded && (
-                  <View className="border-t border-slate-100 mt-3 pt-3 flex-row justify-between items-center">
-                    {item.manageStock ? (
-                      <View className="flex-row items-center border border-slate-200 rounded overflow-hidden h-8 bg-slate-50">
-                        <Pressable 
-                          onPress={() => adjustStock(item, -1)}
-                          className="w-8 h-full items-center justify-center active:bg-slate-200"
-                        >
-                          <Text className="text-slate-600 font-bold text-sm">-</Text>
-                        </Pressable>
-                        <View className="px-2.5 h-full justify-center items-center bg-white border-x border-slate-200 min-w-[32px]">
-                          <Text className="text-slate-800 font-extrabold text-xs">{item.stockQuantity}</Text>
+                  <View className="border-t border-slate-100 mt-3 pt-3 flex-row justify-between items-center gap-2 flex-wrap">
+                    <View className="flex-row items-center gap-2 flex-wrap">
+                      {item.manageStock ? (
+                        <View className="flex-row items-center border border-slate-200 rounded-md overflow-hidden h-8 bg-slate-50">
+                          <Pressable 
+                            onPress={() => adjustStock(item, -1)}
+                            className="w-8 h-full items-center justify-center active:bg-slate-200"
+                          >
+                            <Text className="text-slate-600 font-bold text-sm">-</Text>
+                          </Pressable>
+                          <View className="px-2.5 h-full justify-center items-center bg-white border-x border-slate-200 min-w-[32px]">
+                            <Text className="text-slate-800 font-extrabold text-xs">{item.stockQuantity}</Text>
+                          </View>
+                          <Pressable 
+                            onPress={() => adjustStock(item, 1)}
+                            className="w-8 h-full items-center justify-center active:bg-slate-200"
+                          >
+                            <Text className="text-slate-600 font-bold text-sm">+</Text>
+                          </Pressable>
                         </View>
-                        <Pressable 
-                          onPress={() => adjustStock(item, 1)}
-                          className="w-8 h-full items-center justify-center active:bg-slate-200"
-                        >
-                          <Text className="text-slate-600 font-bold text-sm">+</Text>
-                        </Pressable>
-                      </View>
-                    ) : (
-                      <View className="px-2.5 h-8 justify-center rounded bg-slate-100 border border-slate-200">
-                        <Text className="text-slate-500 text-[10px] font-bold uppercase">No Limit</Text>
-                      </View>
-                    )}
+                      ) : null}
+
+                      <Pressable
+                        onPress={() => handleOpenBreakdown(item)}
+                        className="h-8 px-2.5 bg-emerald-500/10 border border-emerald-500/30 rounded-md justify-center items-center flex-row gap-1.5 active:bg-emerald-500/20"
+                      >
+                        <PieChart size={13} color="#10B981" />
+                        <Text className="text-emerald-700 text-[11px] font-black">Product Breakdown</Text>
+                      </Pressable>
+                    </View>
 
                     <View className="flex-row gap-1.5">
                       <Pressable 
@@ -427,6 +541,153 @@ export default function ProductsScreen() {
           }}
         />
       )}
+
+      {/* Smart Product Breakdown Bottom Sheet Popup Modal (8px max border radius) */}
+      <Modal
+        visible={!!selectedBreakdownProduct}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setSelectedBreakdownProduct(null)}
+      >
+        <View className="flex-1 justify-end bg-slate-900/60">
+          <Pressable className="flex-1" onPress={() => setSelectedBreakdownProduct(null)} />
+          <View className="bg-white rounded-t-lg p-6 border-t border-slate-200 shadow-2xl w-full max-h-[82%]">
+            {/* Modal Drag Handle */}
+            <View className="w-12 h-1 bg-slate-300 rounded self-center mb-5" />
+
+            {selectedBreakdownProduct && (
+              <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 10 }}>
+                {/* Product Profile Header */}
+                <View className="flex-row items-start justify-between border-b border-slate-150 pb-5 mb-5 gap-3.5">
+                  <View className="w-16 h-16 bg-slate-50 rounded-lg overflow-hidden justify-center items-center border border-slate-200 shadow-xs">
+                    {selectedBreakdownProduct.image ? (
+                      <ExpoImage 
+                        source={{ uri: selectedBreakdownProduct.image }} 
+                        style={{ width: '100%', height: '100%' }}
+                        transition={200}
+                      />
+                    ) : (
+                      <Package size={28} color="#94A3B8" />
+                    )}
+                  </View>
+                  <View className="flex-1 justify-center">
+                    <Text className="text-slate-900 font-black text-lg leading-tight" numberOfLines={2}>
+                      {selectedBreakdownProduct.name}
+                    </Text>
+                    <View className="flex-row items-center gap-2.5 mt-1.5 flex-wrap">
+                      <Text className="text-blue-600 font-black text-sm">
+                        {formatCurrency(Number(selectedBreakdownProduct.price || 0))} / unit
+                      </Text>
+                      {selectedBreakdownProduct.stockQuantity !== null && selectedBreakdownProduct.stockQuantity !== undefined && (
+                        <View className="bg-slate-100 px-2 py-0.5 rounded border border-slate-200/80">
+                          <Text className="text-slate-700 font-extrabold text-xs">
+                            In Stock: {selectedBreakdownProduct.stockQuantity}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  </View>
+                  <Pressable 
+                    onPress={() => setSelectedBreakdownProduct(null)}
+                    className="bg-slate-100 p-2 rounded-md active:bg-slate-200"
+                  >
+                    <X size={18} color="#475569" />
+                  </Pressable>
+                </View>
+
+                {selectedBreakdownProduct.loadingBreakdown ? (
+                  <View className="py-12 items-center justify-center">
+                    <ActivityIndicator size="large" color="#3B82F6" />
+                    <Text className="text-slate-500 text-xs font-bold mt-3">Analyzing sales across all orders...</Text>
+                  </View>
+                ) : (
+                  <>
+                    {/* Total Sell Analytics Showcase Card (Max 8px border radius) */}
+                    <View className="bg-slate-900 rounded-lg p-4 mb-6 shadow-sm flex-row justify-between items-center border border-slate-800">
+                      <View className="flex-1 pr-2 border-r border-slate-800">
+                        <Text className="text-slate-400 text-[11px] font-bold uppercase tracking-wider mb-1" numberOfLines={1}>Sold Volume</Text>
+                        <View className="flex-row items-baseline gap-1">
+                          <Text className="text-emerald-400 font-black text-xl" numberOfLines={1} adjustsFontSizeToFit>
+                            {selectedBreakdownProduct.totalQuantityAll || 0}
+                          </Text>
+                          <Text className="text-emerald-200 font-extrabold text-xs">Units</Text>
+                        </View>
+                      </View>
+                      <View className="flex-1 pl-3">
+                        <Text className="text-slate-400 text-[11px] font-bold uppercase tracking-wider mb-1" numberOfLines={1}>Net Revenue</Text>
+                        <Text className="text-white font-black text-lg" numberOfLines={1} adjustsFontSizeToFit>
+                          {formatCurrency(selectedBreakdownProduct.revenueGenerated || 0)}
+                        </Text>
+                      </View>
+                    </View>
+
+                    {/* Status Breakdown Section */}
+                    <View className="mb-6">
+                      <View className="flex-row items-center gap-2 mb-3">
+                        <Layers size={18} color="#3B82F6" />
+                        <Text className="text-slate-800 font-black text-base">Order Status Breakdown</Text>
+                      </View>
+
+                      {(!selectedBreakdownProduct.statusBreakdown || Object.keys(selectedBreakdownProduct.statusBreakdown).length === 0) ? (
+                        <View className="bg-slate-50 border border-slate-200 rounded-lg p-5 items-center">
+                          <Text className="text-slate-600 font-bold text-xs text-center">
+                            No orders recorded for this product yet.
+                          </Text>
+                        </View>
+                      ) : (
+                        <View className="bg-white border border-slate-200/90 rounded-lg overflow-hidden divide-y divide-slate-100">
+                          {Object.entries(selectedBreakdownProduct.statusBreakdown || {}).sort((a: any, b: any) => (b[1]?.count || 0) - (a[1]?.count || 0)).map(([statusKey, val]: [string, any]) => {
+                            let badgeColor = 'bg-blue-500';
+                            let badgeTitle = statusKey.charAt(0).toUpperCase() + statusKey.slice(1);
+                            if (statusKey === 'completed' || statusKey === 'complete') { badgeColor = 'bg-emerald-500'; badgeTitle = 'Completed Orders'; }
+                            if (statusKey === 'processing') { badgeColor = 'bg-amber-500'; badgeTitle = 'Processing'; }
+                            if (statusKey === 'cancelled' || statusKey === 'canceled') { badgeColor = 'bg-rose-500'; badgeTitle = 'Cancelled'; }
+                            if (statusKey === 'on-hold' || statusKey === 'on_hold') { badgeColor = 'bg-blue-600'; badgeTitle = 'On-Hold'; }
+                            if (statusKey === 'pending') { badgeColor = 'bg-purple-500'; badgeTitle = 'Pending Payment'; }
+
+                            return (
+                              <View key={statusKey} className="p-4 flex-row items-center justify-between bg-slate-50/50">
+                                <View className="flex-row items-center gap-3">
+                                  <View className={`w-3 h-3 rounded-full ${badgeColor}`} />
+                                  <Text className="text-slate-800 font-bold text-sm">{badgeTitle}</Text>
+                                </View>
+                                <View className="items-end">
+                                  <Text className="text-slate-900 font-black text-base">{val.count} Units</Text>
+                                  <Text className="text-slate-500 text-xs font-semibold">{formatCurrency(val.revenue)}</Text>
+                                </View>
+                              </View>
+                            );
+                          })}
+                        </View>
+                      )}
+                    </View>
+
+                    {/* Smart Bottom Actions (Max 8px border radius) */}
+                    <View className="flex-row gap-3 mt-2">
+                      <Pressable
+                        onPress={() => {
+                          const pid = selectedBreakdownProduct.id;
+                          setSelectedBreakdownProduct(null);
+                          router.push(`/products/${pid}` as any);
+                        }}
+                        className="flex-1 bg-blue-600 h-12 rounded-lg items-center justify-center shadow-sm shadow-blue-500/30 active:bg-blue-700"
+                      >
+                        <Text className="text-white font-extrabold text-sm">Edit Product Catalog</Text>
+                      </Pressable>
+                      <Pressable
+                        onPress={() => setSelectedBreakdownProduct(null)}
+                        className="bg-slate-100 px-6 h-12 rounded-lg items-center justify-center active:bg-slate-200 border border-slate-200/80"
+                      >
+                        <Text className="text-slate-700 font-extrabold text-sm">Close</Text>
+                      </Pressable>
+                    </View>
+                  </>
+                )}
+              </ScrollView>
+            )}
+          </View>
+        </View>
+      </Modal>
 
     </View>
   );

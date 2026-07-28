@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { View, Text, TextInput, Pressable, FlatList, ActivityIndicator, RefreshControl } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { db, sqlite } from '../../shared/database/db';
@@ -13,6 +13,7 @@ export default function CustomersScreen() {
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
+  const isInitialMount = useRef(true);
 
   // Debounce search query changes
   useEffect(() => {
@@ -23,7 +24,7 @@ export default function CustomersScreen() {
   }, [searchQuery]);
 
   // Retrieve cached customers from SQLite ordered by LTV
-  const loadLocalCustomers = useCallback(() => {
+  const loadLocalCustomers = useCallback(async () => {
     try {
       let rows: any[] = [];
       const queryParams: any[] = [];
@@ -38,7 +39,7 @@ export default function CustomersScreen() {
 
       queryStr += ` ORDER BY CAST(total_spent AS REAL) DESC`;
 
-      rows = sqlite.getAllSync<any>(queryStr, ...queryParams);
+      rows = await sqlite.getAllAsync<any>(queryStr, ...queryParams);
 
       const parsed = rows.map((r: any) => ({
         id: r.id,
@@ -57,16 +58,25 @@ export default function CustomersScreen() {
     }
   }, [debouncedSearchQuery]);
 
+  const loadLocalCustomersRef = useRef(loadLocalCustomers);
+  useEffect(() => {
+    loadLocalCustomersRef.current = loadLocalCustomers;
+  }, [loadLocalCustomers]);
+
+  useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
+    loadLocalCustomersRef.current();
+  }, [debouncedSearchQuery]);
+
   // Sync cache and refresh UI on focus
   useFocusEffect(
     useCallback(() => {
-      loadLocalCustomers();
-    }, [loadLocalCustomers])
+      loadLocalCustomersRef.current();
+    }, [])
   );
-
-  useEffect(() => {
-    loadLocalCustomers();
-  }, [debouncedSearchQuery, loadLocalCustomers]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -139,7 +149,7 @@ export default function CustomersScreen() {
                 {/* Details */}
                 <View className="flex-1">
                   <Text className="text-slate-900 font-bold text-sm" numberOfLines={1}>
-                    {item.firstName} {item.lastName || 'Guest Buyer'}
+                    {`${item.firstName || ''} ${item.lastName || ''}`.trim() || 'Guest Buyer'}
                   </Text>
                   <Text className="text-slate-500 text-xs mt-1" numberOfLines={1}>
                     {item.email || 'No email profile'}

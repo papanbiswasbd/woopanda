@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Tabs, useRouter } from 'expo-router';
 import { Pressable, View, Text, Animated, Easing, Modal } from 'react-native';
-import { LayoutDashboard, ShoppingBag, Receipt, Users, Menu, RefreshCw } from 'lucide-react-native';
+import { LayoutDashboard, ShoppingBag, Receipt, Users, Menu, RefreshCw, BarChart3 } from 'lucide-react-native';
 import { useAuthStore } from '../../shared/store/authStore';
 import { syncService } from '../../shared/services/syncService';
 import { sqlite } from '../../shared/database/db';
@@ -69,8 +69,19 @@ export default function TabLayout() {
   useEffect(() => {
     updateCounts();
     // Poll every 3 seconds for real-time high-productivity badge updates
-    const timer = setInterval(updateCounts, 3000);
-    return () => clearInterval(timer);
+    const countTimer = setInterval(updateCounts, 3000);
+    
+    // Poll every 15 seconds to fetch new or updated orders from WooCommerce
+    const syncTimer = setInterval(async () => {
+      if (!isUpdatingCounts.current) {
+        await syncService.syncOrders(false);
+      }
+    }, 15000);
+    
+    return () => {
+      clearInterval(countTimer);
+      clearInterval(syncTimer);
+    };
   }, []);
 
   const triggerManualSync = async () => {
@@ -171,11 +182,18 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="analytics"
+        options={{
+          title: 'Store Analytics',
+          tabBarLabel: 'Analytics',
+          tabBarIcon: ({ color, size }) => <BarChart3 size={size} color={color} />,
+        }}
+      />
+      <Tabs.Screen
         name="customers"
         options={{
+          href: null,
           title: 'Customers',
-          tabBarLabel: 'Customers',
-          tabBarIcon: ({ color, size }) => <Users size={size} color={color} />,
         }}
       />
       <Tabs.Screen

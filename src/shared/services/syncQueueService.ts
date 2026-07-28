@@ -16,7 +16,7 @@ export const syncQueueService = {
       });
       console.log(`Enqueued offline sync task: ${action}`);
     } catch (error) {
-      console.error('Failed to enqueue sync task:', error);
+      console.warn('Failed to enqueue sync task:', error);
     }
   },
 
@@ -212,6 +212,47 @@ export const syncQueueService = {
             break;
           }
 
+          case 'CREATE_ORDER_NOTE': {
+            const { orderId, ...data } = payload;
+            const result: any = await apiClient.post(`orders/${orderId}/notes`, data);
+            
+            // We should fetch the latest order to get all updated notes, or just append the note to local db
+            // For simplicity, we just fetch the order notes and update the local order notes
+            const notes: any = await apiClient.get(`orders/${orderId}/notes`);
+            await db.update(orders)
+              .set({
+                notes: JSON.stringify(notes),
+                lastUpdated: Date.now(),
+              })
+              .where(eq(orders.id, orderId));
+            
+            success = true;
+            shouldDelete = true;
+            break;
+          }
+
+          case 'DELETE_ORDER_NOTE': {
+            const { orderId, noteId } = payload;
+            await apiClient.delete(`orders/${orderId}/notes/${noteId}?force=true`);
+            
+            // Re-fetch notes to keep local DB in sync
+            try {
+              const notes: any = await apiClient.get(`orders/${orderId}/notes`);
+              await db.update(orders)
+                .set({
+                  notes: JSON.stringify(notes),
+                  lastUpdated: Date.now(),
+                })
+                .where(eq(orders.id, orderId));
+            } catch (e) {
+              console.warn('Failed to update local notes cache after deletion', e);
+            }
+            
+            success = true;
+            shouldDelete = true;
+            break;
+          }
+
           case 'CREATE_COUPON': {
             const result: any = await apiClient.post('coupons', payload);
             await db.insert(coupons).values({
@@ -278,7 +319,7 @@ export const syncQueueService = {
             break;
         }
       } catch (error: any) {
-        console.error(`Sync error on task ${item.id} (${item.action}):`, error);
+        console.warn(`Sync error on task ${item.id} (${item.action}):`, error);
         errorMessage = error.message || 'Unknown error';
 
         if (error instanceof ApiError) {

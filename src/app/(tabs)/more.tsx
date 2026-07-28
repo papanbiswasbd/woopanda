@@ -6,16 +6,15 @@ import { syncQueueService } from '../../shared/services/syncQueueService';
 import { syncService } from '../../shared/services/syncService';
 import { 
   BarChart3, AlertTriangle, Ticket, MessageSquare, 
-  Settings, LogOut, RefreshCw, Globe, ChevronRight, Key, ShieldAlert 
+  Settings, LogOut, RefreshCw, Globe, ChevronRight, Key, ShieldAlert, Users, User, Repeat
 } from 'lucide-react-native';
 
 export default function MoreHubScreen() {
   const router = useRouter();
-  const { credentials, logout } = useAuthStore();
+  const { credentials, logout, disconnectStore, firebaseUser } = useAuthStore();
   const [pendingQueueCount, setPendingQueueCount] = useState(0);
   const [syncing, setSyncing] = useState(false);
 
-  // Load pending queue length from SQLite
   const loadQueueLength = useCallback(async () => {
     try {
       const count = await syncQueueService.getPendingCount();
@@ -44,18 +43,36 @@ export default function MoreHubScreen() {
     }
   };
 
-  const handleLogout = () => {
+  const handleSwitchStore = () => {
     Alert.alert(
-      'Logout',
-      'Are you sure you want to logout and clear all local API credentials?',
+      'Switch WooCommerce Store',
+      'This will detach your active WooCommerce store on this device while keeping you logged into your cloud account. Proceed?',
       [
         { text: 'Cancel', style: 'cancel' },
         { 
-          text: 'Logout', 
+          text: 'Switch Store', 
+          style: 'default',
+          onPress: async () => {
+            await disconnectStore();
+            router.replace('/auth/connect');
+          }
+        }
+      ]
+    );
+  };
+
+  const handleLogout = () => {
+    Alert.alert(
+      'Sign Out Cloud Account',
+      'Are you sure you want to log out of your Firebase account on this device?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Sign Out', 
           style: 'destructive',
           onPress: async () => {
             await logout();
-            router.replace('/auth');
+            router.replace('/auth/login');
           }
         }
       ]
@@ -65,36 +82,59 @@ export default function MoreHubScreen() {
   return (
     <ScrollView className="flex-1 bg-slate-50 px-5 pt-4" contentContainerStyle={{ paddingBottom: 40 }}>
       
-      {/* 1. WooCommerce Store Meta Information */}
-      <View className="bg-white border border-slate-200 rounded-3xl p-5 mb-5 flex-row gap-4 items-center">
-        <View className="w-12 h-12 bg-blue-600/10 rounded-2xl items-center justify-center border border-blue-500/20">
-          <Globe size={22} color="#3B82F6" />
-        </View>
-        <View className="flex-1">
-          <Text className="text-slate-900 font-extrabold text-sm" numberOfLines={1}>
-            {credentials?.siteUrl?.replace(/^https?:\/\//, '')}
-          </Text>
-          <View className="flex-row items-center gap-1.5 mt-1.5">
-            <Key size={10} color="#64748B" />
-            <Text className="text-slate-500 text-[10px] font-bold uppercase tracking-wider">
-              Method: {credentials?.authMethod?.replace('_', ' ')}
+      {/* 1. Account & WooCommerce Store Meta Information (Max 8px border radius) */}
+      <View className="bg-white border border-slate-200 rounded-lg p-4 mb-4 shadow-sm">
+        
+        {/* Firebase Cloud User Account */}
+        {firebaseUser && (
+          <View className="flex-row items-center gap-3 pb-3.5 mb-3.5 border-b border-slate-100">
+            <View className="w-10 h-10 bg-purple-500/10 rounded-md items-center justify-center border border-purple-500/20">
+              <User size={18} color="#A855F7" />
+            </View>
+            <View className="flex-1">
+              <Text className="text-slate-900 font-extrabold text-xs">Cloud Profile</Text>
+              <Text className="text-slate-500 font-semibold text-xs" numberOfLines={1}>
+                {firebaseUser.email || 'Google User Account'}
+              </Text>
+            </View>
+            <View className="bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded">
+              <Text className="text-emerald-700 font-black text-[10px]">SYNCED</Text>
+            </View>
+          </View>
+        )}
+
+        {/* Connected WooCommerce Store */}
+        <View className="flex-row gap-3.5 items-center">
+          <View className="w-10 h-10 bg-blue-600/10 rounded-md items-center justify-center border border-blue-500/20">
+            <Globe size={18} color="#3B82F6" />
+          </View>
+          <View className="flex-1">
+            <Text className="text-slate-900 font-black text-sm" numberOfLines={1}>
+              {credentials?.siteUrl?.replace(/^https?:\/\//, '')}
             </Text>
+            <View className="flex-row items-center gap-1.5 mt-1">
+              <Key size={10} color="#64748B" />
+              <Text className="text-slate-500 text-[10px] font-extrabold uppercase tracking-wider">
+                Auth: {credentials?.authMethod?.replace('_', ' ')}
+              </Text>
+            </View>
           </View>
         </View>
+
       </View>
 
       {/* 2. Offline Synchronization Queue Status */}
-      <View className="bg-white border border-slate-200 rounded-3xl p-5 mb-5">
+      <View className="bg-white border border-slate-200 rounded-lg p-4 mb-4 shadow-sm">
         <View className="flex-row justify-between items-center">
-          <View className="flex-1 pr-4">
-            <Text className="text-slate-900 font-bold text-sm">Offline Sync Engine</Text>
+          <View className="flex-1 pr-3">
+            <Text className="text-slate-900 font-black text-sm">Offline Sync Engine</Text>
             {pendingQueueCount > 0 ? (
-              <Text className="text-amber-400 text-xs mt-1 font-semibold flex-row items-center gap-1">
-                {pendingQueueCount} modifications queued to upload
+              <Text className="text-amber-600 text-xs mt-0.5 font-bold">
+                {pendingQueueCount} modification(s) queued
               </Text>
             ) : (
-              <Text className="text-slate-500 text-xs mt-1 font-medium">
-                No pending offline edits. All synchronized.
+              <Text className="text-slate-500 text-xs mt-0.5 font-semibold">
+                No pending edits. All synchronized.
               </Text>
             )}
           </View>
@@ -102,7 +142,7 @@ export default function MoreHubScreen() {
           <Pressable 
             onPress={handleSyncNow}
             disabled={syncing}
-            className={`h-9 px-4 rounded-xl flex-row items-center justify-center gap-1.5 ${
+            className={`h-9 px-3.5 rounded-md flex-row items-center justify-center gap-1.5 ${
               syncing ? 'bg-blue-800' : 'bg-blue-600 active:bg-blue-700'
             }`}
           >
@@ -110,8 +150,8 @@ export default function MoreHubScreen() {
               <ActivityIndicator size="small" color="#FFFFFF" />
             ) : (
               <>
-                <RefreshCw size={14} color="#FFFFFF" />
-                <Text className="text-slate-900 font-bold text-xs">Sync Now</Text>
+                <RefreshCw size={13} color="#FFFFFF" />
+                <Text className="text-white font-extrabold text-xs">Sync Now</Text>
               </>
             )}
           </Pressable>
@@ -119,15 +159,29 @@ export default function MoreHubScreen() {
       </View>
 
       {/* 3. Operational Features List */}
-      <View className="bg-white border border-slate-200 rounded-3xl p-4 mb-5 gap-0.5">
+      <View className="bg-white border border-slate-200 rounded-lg p-2 mb-4 shadow-sm">
         
-        {/* Analytics Item */}
+        {/* Customer Directory Item */}
         <Pressable 
-          onPress={() => router.push('/analytics/index')}
-          className="flex-row justify-between items-center p-3 rounded-2xl active:bg-slate-150"
+          onPress={() => router.push('/customers')}
+          className="flex-row justify-between items-center p-3 rounded-lg active:bg-slate-100"
         >
           <View className="flex-row items-center gap-3.5">
-            <View className="bg-blue-500/10 p-2.5 rounded-xl">
+            <View className="bg-purple-500/10 p-2 rounded-md">
+              <Users size={18} color="#A855F7" />
+            </View>
+            <Text className="text-slate-800 font-bold text-sm">Customer Directory</Text>
+          </View>
+          <ChevronRight size={16} color="#475569" />
+        </Pressable>
+
+        {/* Analytics Item */}
+        <Pressable 
+          onPress={() => router.push('/analytics')}
+          className="flex-row justify-between items-center p-3 rounded-lg active:bg-slate-100"
+        >
+          <View className="flex-row items-center gap-3.5">
+            <View className="bg-blue-500/10 p-2 rounded-md">
               <BarChart3 size={18} color="#3B82F6" />
             </View>
             <Text className="text-slate-800 font-bold text-sm">Detailed Analytics</Text>
@@ -138,10 +192,10 @@ export default function MoreHubScreen() {
         {/* Inventory Item */}
         <Pressable 
           onPress={() => router.push('/inventory/index')}
-          className="flex-row justify-between items-center p-3 rounded-2xl active:bg-slate-150"
+          className="flex-row justify-between items-center p-3 rounded-lg active:bg-slate-100"
         >
           <View className="flex-row items-center gap-3.5">
-            <View className="bg-amber-500/10 p-2.5 rounded-xl">
+            <View className="bg-amber-500/10 p-2 rounded-md">
               <AlertTriangle size={18} color="#F59E0B" />
             </View>
             <Text className="text-slate-800 font-bold text-sm">Inventory Alerts</Text>
@@ -152,10 +206,10 @@ export default function MoreHubScreen() {
         {/* Coupons Item */}
         <Pressable 
           onPress={() => router.push('/coupons/index')}
-          className="flex-row justify-between items-center p-3 rounded-2xl active:bg-slate-150"
+          className="flex-row justify-between items-center p-3 rounded-lg active:bg-slate-100"
         >
           <View className="flex-row items-center gap-3.5">
-            <View className="bg-purple-500/10 p-2.5 rounded-xl">
+            <View className="bg-purple-500/10 p-2 rounded-md">
               <Ticket size={18} color="#A855F7" />
             </View>
             <Text className="text-slate-800 font-bold text-sm">Coupon Codes</Text>
@@ -166,10 +220,10 @@ export default function MoreHubScreen() {
         {/* Reviews Item */}
         <Pressable 
           onPress={() => router.push('/reviews/index')}
-          className="flex-row justify-between items-center p-3 rounded-2xl active:bg-slate-150"
+          className="flex-row justify-between items-center p-3 rounded-lg active:bg-slate-100"
         >
           <View className="flex-row items-center gap-3.5">
-            <View className="bg-emerald-500/10 p-2.5 rounded-xl">
+            <View className="bg-emerald-500/10 p-2 rounded-md">
               <MessageSquare size={18} color="#10B981" />
             </View>
             <Text className="text-slate-800 font-bold text-sm">Product Reviews</Text>
@@ -180,16 +234,15 @@ export default function MoreHubScreen() {
       </View>
 
       {/* 4. Settings & Preferences Card */}
-      <View className="bg-white border border-slate-200 rounded-3xl p-4 mb-5 gap-0.5">
+      <View className="bg-white border border-slate-200 rounded-lg p-2 mb-5 shadow-sm">
         
-        {/* Settings Item */}
         <Pressable 
           onPress={() => router.push('/settings/index')}
-          className="flex-row justify-between items-center p-3 rounded-2xl active:bg-slate-150"
+          className="flex-row justify-between items-center p-3 rounded-lg active:bg-slate-100"
         >
           <View className="flex-row items-center gap-3.5">
-            <View className="bg-slate-100 p-2.5 rounded-xl">
-              <Settings size={18} color="#94A3B8" />
+            <View className="bg-slate-100 p-2 rounded-md">
+              <Settings size={18} color="#475569" />
             </View>
             <Text className="text-slate-800 font-bold text-sm">App Settings</Text>
           </View>
@@ -198,14 +251,26 @@ export default function MoreHubScreen() {
 
       </View>
 
-      {/* 5. Logout Button */}
-      <Pressable 
-        onPress={handleLogout}
-        className="bg-red-500/10 border border-red-500/20 h-12 rounded-2xl flex-row items-center justify-center gap-2 active:bg-red-500/20 shadow-sm"
-      >
-        <LogOut size={18} color="#EF4444" />
-        <Text className="text-red-400 font-extrabold text-base">Logout Account</Text>
-      </Pressable>
+      {/* 5. Store & Account Actions */}
+      <View className="gap-3">
+        {/* Switch WooCommerce Store */}
+        <Pressable 
+          onPress={handleSwitchStore}
+          className="bg-slate-200 border border-slate-300 h-11 rounded-lg flex-row items-center justify-center gap-2 active:bg-slate-300"
+        >
+          <Repeat size={16} color="#334155" />
+          <Text className="text-slate-800 font-extrabold text-sm">Switch WooCommerce Store</Text>
+        </Pressable>
+
+        {/* Sign Out Account */}
+        <Pressable 
+          onPress={handleLogout}
+          className="bg-red-500/10 border border-red-500/20 h-11 rounded-lg flex-row items-center justify-center gap-2 active:bg-red-500/20 shadow-sm"
+        >
+          <LogOut size={16} color="#EF4444" />
+          <Text className="text-red-600 font-black text-sm uppercase tracking-wide">Sign Out Account</Text>
+        </Pressable>
+      </View>
 
     </ScrollView>
   );

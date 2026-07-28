@@ -5,9 +5,11 @@ import { db, sqlite } from '../../shared/database/db';
 import { products } from '../../shared/database/schema';
 import { eq } from 'drizzle-orm';
 import { syncQueueService } from '../../shared/services/syncQueueService';
-import { Save, Trash2, Image as ImageIcon } from 'lucide-react-native';
+import { Save, Trash2, Image as ImageIcon, Plus, Edit, X, Upload, ChevronLeft, ChevronRight } from 'lucide-react-native';
 import { Image as ExpoImage } from 'expo-image';
 import { useSettingsStore, getCurrencySymbol } from '../../shared/store/settingsStore';
+import CategorySelector from '../../components/CategorySelector';
+import * as ImagePicker from 'expo-image-picker';
 
 export default function EditProductScreen() {
   const router = useRouter();
@@ -32,7 +34,7 @@ export default function EditProductScreen() {
   const [stockStatus, setStockStatus] = useState('instock');
   const [status, setStatus] = useState('publish');
   const [images, setImages] = useState<any[]>([]);
-  const [categoriesStr, setCategoriesStr] = useState('');
+  const [selectedCategories, setSelectedCategories] = useState<any[]>([]);
   const [description, setDescription] = useState('');
   const [shortDescription, setShortDescription] = useState('');
   
@@ -98,7 +100,7 @@ export default function EditProductScreen() {
         try {
           catList = row.categories ? JSON.parse(row.categories) : [];
         } catch {}
-        setCategoriesStr(catList.map((c: any) => c.name).join(', '));
+        setSelectedCategories(catList.map((c: any) => ({ name: c.name, slug: c.slug, id: c.id })));
       } else {
         Alert.alert('Error', 'Product not found in local cache.');
         router.back();
@@ -109,6 +111,82 @@ export default function EditProductScreen() {
       setLoading(false);
     }
   }, [productId]);
+
+  // Pick Main Thumbnail Image
+  const handlePickThumbnail = async () => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const newUri = result.assets[0].uri;
+        const newThumb = { src: newUri, name: `thumb-${Date.now()}.jpg`, position: 0 };
+        setImages((prev) => {
+          if (prev.length === 0) return [newThumb];
+          return [newThumb, ...prev.slice(1)];
+        });
+      }
+    } catch (err) {
+      Alert.alert('Error', 'Failed to select image from photo library.');
+    }
+  };
+
+  // Remove Main Thumbnail Image
+  const handleRemoveThumbnail = () => {
+    Alert.alert('Remove Thumbnail', 'Are you sure you want to remove the main product thumbnail?', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Remove', style: 'destructive', onPress: () => {
+        setImages((prev) => prev.slice(1));
+      }}
+    ]);
+  };
+
+  // Add Gallery Images (supports multi-selection)
+  const handleAddGalleryImages = async () => {
+    try {
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsMultipleSelection: true,
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const newGalleryItems = result.assets.map((a, idx) => ({
+          src: a.uri,
+          name: `gallery-${Date.now()}-${idx}.jpg`
+        }));
+        setImages((prev) => [...prev, ...newGalleryItems]);
+      }
+    } catch (err) {
+      Alert.alert('Error', 'Failed to pick gallery images.');
+    }
+  };
+
+  // Remove a specific gallery image (by its true index in the images array)
+  const handleRemoveGalleryImage = (actualIndex: number) => {
+    setImages((prev) => prev.filter((_, idx) => idx !== actualIndex));
+  };
+
+  // Handle Manual Reordering (Move Left / Right)
+  const handleMoveGalleryImage = (actualIndex: number, direction: 'left' | 'right') => {
+    setImages((prev) => {
+      const newArray = [...prev];
+      const targetIndex = direction === 'left' ? actualIndex - 1 : actualIndex + 1;
+      
+      // Ensure we don't swap with the main thumbnail (index 0) or go out of bounds
+      if (targetIndex < 1 || targetIndex >= newArray.length) return prev;
+
+      // Swap
+      const temp = newArray[actualIndex];
+      newArray[actualIndex] = newArray[targetIndex];
+      newArray[targetIndex] = temp;
+      
+      return newArray;
+    });
+  };
 
   // Save edits (Optimistic update + queue back sync)
   const handleSave = async () => {
@@ -121,16 +199,13 @@ export default function EditProductScreen() {
     const stockQtyVal = manageStock && stockQuantity.trim() !== '' ? Number(stockQuantity) : null;
     const finalStockStatus = stockQtyVal !== null && stockQtyVal <= 0 ? 'outofstock' : stockStatus;
     const menuOrderVal = menuOrder.trim() !== '' ? Number(menuOrder) : 0;
-    const finalCategories = categoriesStr.split(',')
-      .map(c => c.trim())
-      .filter(c => c.length > 0)
-      .map(c => ({ name: c }));
+    const finalCategories = selectedCategories.map(c => ({ id: c.id, name: c.name, slug: c.slug }));
 
     try {
       // 1. Update SQLite locally
       sqlite.runSync(
         `UPDATE products 
-         SET name = ?, sku = ?, barcode = ?, regular_price = ?, price = ?, sale_price = ?, manage_stock = ?, stock_quantity = ?, stock_status = ?, status = ?, description = ?, short_description = ?, slug = ?, type = ?, virtual = ?, downloadable = ?, weight = ?, length = ?, width = ?, height = ?, backorders = ?, sold_individually = ?, reviews_allowed = ?, purchase_note = ?, menu_order = ?, categories = ?, last_updated = ?
+         SET name = ?, sku = ?, barcode = ?, regular_price = ?, price = ?, sale_price = ?, manage_stock = ?, stock_quantity = ?, stock_status = ?, status = ?, description = ?, short_description = ?, slug = ?, type = ?, virtual = ?, downloadable = ?, weight = ?, length = ?, width = ?, height = ?, backorders = ?, sold_individually = ?, reviews_allowed = ?, purchase_note = ?, menu_order = ?, categories = ?, images = ?, last_updated = ?
          WHERE id = ?`,
         name.trim(),
         sku.trim(),
@@ -158,6 +233,7 @@ export default function EditProductScreen() {
         purchaseNote.trim(),
         menuOrderVal,
         JSON.stringify(finalCategories),
+        JSON.stringify(images),
         Date.now(),
         productId
       );
@@ -191,6 +267,11 @@ export default function EditProductScreen() {
         purchase_note: purchaseNote.trim(),
         menu_order: menuOrderVal,
         categories: finalCategories,
+        images: images.map((img: any, idx: number) => ({
+          ...(img.id ? { id: img.id } : { id: 0 }),
+          src: img.src,
+          position: idx
+        })),
         meta_data: [
           {
             key: '_barcode',
@@ -254,27 +335,148 @@ export default function EditProductScreen() {
   return (
     <ScrollView className="flex-1 bg-slate-50 px-5 pt-4" contentContainerStyle={{ paddingBottom: 40 }}>
       
-      {/* Product Image Gallery Slider */}
-      <View className="bg-white border border-slate-200 rounded-3xl p-4 mb-5 items-center justify-center">
+      {/* Product Media Suite: Main Thumbnail & Gallery (Max 8px border radius) */}
+      <View className="bg-white border border-slate-200 rounded-lg p-5 mb-5 shadow-sm">
+        
+        {/* Main Thumbnail Section */}
+        <View className="flex-row items-center justify-between mb-3">
+          <View className="flex-row items-center gap-2">
+            <View className="bg-blue-500/10 p-2 rounded-md">
+              <ImageIcon size={16} color="#3B82F6" />
+            </View>
+            <Text className="text-slate-800 font-black text-sm">Main Thumbnail</Text>
+          </View>
+          {images.length > 0 && (
+            <Pressable
+              onPress={handlePickThumbnail}
+              className="px-3 py-1 bg-slate-100 border border-slate-200 rounded-md active:bg-slate-200"
+            >
+              <Text className="text-slate-700 font-bold text-xs">Change</Text>
+            </Pressable>
+          )}
+        </View>
+
         {images.length > 0 ? (
-          <View className="w-full h-48 rounded-2xl overflow-hidden relative">
+          <Pressable 
+            onPress={handlePickThumbnail}
+            className="w-full h-52 rounded-lg bg-slate-50 border border-slate-200 overflow-hidden relative mb-6 active:opacity-80"
+          >
             <ExpoImage 
               source={{ uri: images[0].src }} 
               style={{ width: '100%', height: '100%' }}
               contentFit="contain"
             />
-            {images.length > 1 && (
-              <View className="absolute bottom-3 right-3 bg-slate-900/40 px-3 py-1 rounded-full border border-white/10">
-                <Text className="text-slate-900 text-[10px] font-bold">+{images.length - 1} More Images</Text>
+            {/* Overlay instruction to make changing extremely obvious */}
+            <View className="absolute inset-0 bg-slate-900/20 items-center justify-center" pointerEvents="none">
+              <View className="bg-slate-900/80 px-3 py-1.5 rounded-full flex-row items-center gap-1.5 border border-white/20">
+                <ImageIcon size={14} color="#FFFFFF" />
+                <Text className="text-white text-xs font-bold">Tap to change</Text>
               </View>
-            )}
-          </View>
+            </View>
+            <Pressable
+              onPress={handleRemoveThumbnail}
+              className="absolute top-2 right-2 bg-red-600/90 w-8 h-8 rounded-md items-center justify-center shadow-sm active:bg-red-700"
+            >
+              <Trash2 size={15} color="#FFFFFF" />
+            </Pressable>
+            <View className="absolute bottom-2 left-2 bg-slate-900/90 px-2.5 py-1 rounded">
+              <Text className="text-white text-[10px] font-extrabold uppercase">Primary Display</Text>
+            </View>
+          </Pressable>
         ) : (
-          <View className="w-full h-48 rounded-2xl bg-slate-50 items-center justify-center border border-dashed border-slate-200">
-            <ImageIcon size={36} color="#475569" />
-            <Text className="text-slate-500 text-xs mt-2 font-medium">No Images uploaded</Text>
-          </View>
+          <Pressable
+            onPress={handlePickThumbnail}
+            className="w-full h-44 rounded-lg bg-slate-50 border border-dashed border-slate-300 items-center justify-center mb-6 active:bg-slate-100"
+          >
+            <Upload size={32} color="#3B82F6" />
+            <Text className="text-slate-800 font-black text-sm mt-3">+ Upload Main Thumbnail</Text>
+            <Text className="text-slate-400 text-xs font-medium mt-1">Select from photo library</Text>
+          </Pressable>
         )}
+
+        {/* Gallery Images Section */}
+        <View className="border-t border-slate-150 pt-5">
+          <View className="flex-row items-center justify-between mb-4 flex-wrap gap-2">
+            <View className="flex-1 min-w-[180px]">
+              <Text className="text-slate-800 font-black text-sm">
+                Product Gallery ({images.length > 1 ? images.length - 1 : 0})
+              </Text>
+              <Text className="text-slate-500 text-xs mt-0.5">Use the arrows to reorder gallery photos</Text>
+            </View>
+            <Pressable
+              onPress={handleAddGalleryImages}
+              className="bg-blue-600 px-3.5 py-2 rounded-md flex-row items-center gap-1.5 shadow-sm shadow-blue-500/30 active:bg-blue-700"
+            >
+              <Plus size={14} color="#FFFFFF" />
+              <Text className="text-white font-black text-xs">Add Images</Text>
+            </Pressable>
+          </View>
+
+          {images.length > 1 ? (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} className="w-full pb-2">
+              <View className="flex-row items-center gap-3">
+                {images.slice(1).map((img: any, idx: number) => {
+                  const actualIndex = idx + 1;
+                  const isFirstGallery = actualIndex === 1;
+                  const isLastGallery = actualIndex === images.length - 1;
+
+                  return (
+                    <View 
+                      key={`gallery-${actualIndex}-${img.src}`}
+                      className="w-28 h-28 rounded-lg bg-slate-50 border border-slate-200 overflow-hidden relative shadow-xs"
+                    >
+                      <ExpoImage 
+                        source={{ uri: img.src }}
+                        style={{ width: '100%', height: '100%' }}
+                        contentFit="cover"
+                      />
+                      
+                      {/* Top Action Bar (Move & Delete) */}
+                      <View className="absolute top-1 left-1 right-1 flex-row items-center justify-between pointer-events-auto">
+                        <View className="flex-row gap-1">
+                          {!isFirstGallery && (
+                            <Pressable
+                              onPress={() => handleMoveGalleryImage(actualIndex, 'left')}
+                              className="bg-slate-900/80 w-6 h-6 rounded items-center justify-center active:bg-slate-700"
+                            >
+                              <ChevronLeft size={14} color="#FFFFFF" />
+                            </Pressable>
+                          )}
+                          {!isLastGallery && (
+                            <Pressable
+                              onPress={() => handleMoveGalleryImage(actualIndex, 'right')}
+                              className="bg-slate-900/80 w-6 h-6 rounded items-center justify-center active:bg-slate-700"
+                            >
+                              <ChevronRight size={14} color="#FFFFFF" />
+                            </Pressable>
+                          )}
+                        </View>
+                        <Pressable
+                          onPress={() => handleRemoveGalleryImage(actualIndex)}
+                          className="bg-red-600/90 w-6 h-6 rounded items-center justify-center active:bg-red-700"
+                        >
+                          <X size={12} color="#FFFFFF" />
+                        </Pressable>
+                      </View>
+
+                      <View className="absolute bottom-1.5 left-1.5 bg-slate-900/80 px-2 py-0.5 rounded">
+                        <Text className="text-white text-[10px] font-bold">#{actualIndex}</Text>
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            </ScrollView>
+          ) : (
+            <View className="bg-slate-50 rounded-lg p-6 items-center border border-slate-200/80">
+              <ImageIcon size={24} color="#CBD5E1" />
+              <Text className="text-slate-500 text-xs font-semibold mt-2 text-center">
+                No extra gallery photos attached. Click "Add Images" above to attach gallery photos.
+              </Text>
+            </View>
+          )}
+        </View>
+
       </View>
 
       {/* 1. General Product Details Card */}
@@ -355,15 +557,12 @@ export default function EditProductScreen() {
           </View>
         </View>
 
-        {/* Categories Comma Separated */}
+        {/* Categories Selector */}
         <View>
-          <Text className="text-slate-600 font-semibold text-xs mb-2">Categories (Comma separated)</Text>
-          <TextInput
-            value={categoriesStr}
-            onChangeText={setCategoriesStr}
-            placeholder="e.g. Music, Instruments, Audio"
-            placeholderTextColor="#475569"
-            className="bg-slate-50 border border-slate-200 text-slate-900 rounded-xl h-11 px-3 text-sm"
+          <Text className="text-slate-600 font-semibold text-xs mb-2">Categories</Text>
+          <CategorySelector 
+            selectedCategories={selectedCategories} 
+            onChange={setSelectedCategories} 
           />
         </View>
 

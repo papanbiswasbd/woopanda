@@ -6,6 +6,7 @@ import { products } from '../../shared/database/schema';
 import { syncQueueService } from '../../shared/services/syncQueueService';
 import { Plus } from 'lucide-react-native';
 import { useSettingsStore, getCurrencySymbol } from '../../shared/store/settingsStore';
+import CategorySelector from '../../components/CategorySelector';
 
 export default function CreateProductScreen() {
   const router = useRouter();
@@ -28,7 +29,7 @@ export default function CreateProductScreen() {
   const [stockQuantity, setStockQuantity] = useState('');
   const [stockStatus, setStockStatus] = useState('instock');
   const [status, setStatus] = useState('publish');
-  const [categoriesStr, setCategoriesStr] = useState('');
+  const [selectedCategories, setSelectedCategories] = useState<any[]>([]);
   const [description, setDescription] = useState('');
   const [shortDescription, setShortDescription] = useState('');
   
@@ -72,10 +73,7 @@ export default function CreateProductScreen() {
     const stockQtyVal = manageStock && stockQuantity.trim() !== '' ? Number(stockQuantity) : null;
     const finalStockStatus = stockQtyVal !== null && stockQtyVal <= 0 ? 'outofstock' : stockStatus;
     const menuOrderVal = menuOrder.trim() !== '' ? Number(menuOrder) : 0;
-    const finalCategories = categoriesStr.split(',')
-      .map(c => c.trim())
-      .filter(c => c.length > 0)
-      .map(c => ({ name: c }));
+    const finalCategories = selectedCategories.map(c => ({ id: c.id, name: c.name, slug: c.slug }));
 
     try {
       // 1. Optimistic insert in SQLite database
@@ -250,15 +248,12 @@ export default function CreateProductScreen() {
           </View>
         </View>
 
-        {/* Categories Comma Separated */}
+        {/* Categories Selector */}
         <View>
-          <Text className="text-slate-600 font-semibold text-xs mb-2">Categories (Comma separated)</Text>
-          <TextInput
-            value={categoriesStr}
-            onChangeText={setCategoriesStr}
-            placeholder="e.g. Music, Instruments, Audio"
-            placeholderTextColor="#475569"
-            className="bg-slate-50 border border-slate-200 text-slate-900 rounded-xl h-11 px-3 text-sm"
+          <Text className="text-slate-600 font-semibold text-xs mb-2">Categories</Text>
+          <CategorySelector 
+            selectedCategories={selectedCategories} 
+            onChange={setSelectedCategories} 
           />
         </View>
 

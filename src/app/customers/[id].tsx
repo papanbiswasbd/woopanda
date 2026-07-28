@@ -136,7 +136,7 @@ export default function CustomerProfileScreen() {
           </Text>
         </View>
         <Text className="text-slate-900 font-extrabold text-lg text-center">
-          {profile.firstName} {profile.lastName || 'Guest User'}
+          {`${profile.firstName || ''} ${profile.lastName || ''}`.trim() || 'Guest User'}
         </Text>
         <Text className="text-slate-500 text-xs mt-1 text-center">{profile.email || 'No email profile'}</Text>
         
