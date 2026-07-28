@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1023242965403",
+    "project_id": "woopanda-c05e3",
+    "storage_bucket": "woopanda-c05e3.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1023242965403:android:71af156d62b4e5433ad13e",
+        "android_client_info": {
+          "package_name": "com.papanbiswas.woopanda"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAfcp5hR7xw_BtOxjxdErDWbPLFQObpDT0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
